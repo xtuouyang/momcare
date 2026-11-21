@@ -81,25 +81,54 @@ function yuanPrice(snippet) {
   return Number.isFinite(n)&&n>0&&n<1000000?n:null;
 }
 function sourceRows(response) {
-  const calls=response?.choices?.[0]?.message?.server_tool_calls||[];
-  const out=[],seen=new Set();
-  for(const call of calls) {
-    const sources=Array.isArray(call.sources)?call.sources:
-      Array.isArray(call?.result?.sources)?call.result.sources:[];
-    for(const source of sources) {
-      const url=shopHttps(source.url);
-      if(!url||seen.has(url))continue;
-      seen.add(url);
-      out.push({
-        url, title:String(source.title||'').replace(/<[^>]*>/g,'').slice(0,160),
-        snippet:String(source.snippet||'').replace(/<[^>]*>/g,'').slice(0,700),
-        site:String(source.site_name||new URL(url).hostname).slice(0,80),
-        imageUrl:shopHttps(source.image_url)
-      });
-      if(out.length>=40)return out;
-    }
+  const message=response?.choices?.[0]?.message||{};
+  const steps=Array.isArray(message.server_tool_calls)?message.server_tool_calls:[];
+  const calls=steps.flatMap(step=>Array.isArray(step.calls)?step.calls:[step]);
+  const rows=[],seen=new Set();
+  function append(src) {
+    const url=shopHttps(src?.url);
+    if(!url||seen.has(url))return;
+    seen.add(url);
+    rows.push({
+      url,title:String(src.title||'').replace(/<[^>]*>/g,'').slice(0,180),
+      snippet:String(src.snippet||'').replace(/<[^>]*>/g,'').slice(0,1000),
+      site:String(src.site_name||new URL(url).hostname).slice(0,90),
+      imageUrl:shopHttps(src.image_url),
+      score:Number(src.rerank_score)||0
+    });
   }
-  return out;
+  for(const call of calls) {
+    if(call?.status==='failed')continue;
+    const list=Array.isArray(call.sources)?call.sources:
+      Array.isArray(call.action?.sources)?call.action.sources:[];
+    for(const src of list)append(src);
+  }
+  // Citations are references, not model-written URLs.
+  for(const a of Array.isArray(message.annotations)?message.annotations:[]) {
+    if(a?.type==='url_citation'&&a.url_citation?.url)
+      append({url:a.url_citation.url,title:a.url_citation.title||'',snippet:''});
+  }
+  return rows.slice(0,60);
+}
+async function deepSeekSearchFallback(query,env){
+  // DeepSeek's standalone Search API uses the SAME key.
+  // A successful search costs $0.00075, so this fallback is used only if needed.
+  try{
+    const response=await fetch('https://api.deepseek.com/v1/tools/search',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.DEEPSEEK_API_KEY},
+      body:JSON.stringify({query:query.slice(0,128),count:18,need_content:false}),
+      signal:AbortSignal.timeout(15000)
+    });
+    if(!response.ok)return [];
+    const data=await response.json();
+    return (Array.isArray(data?.results)?data.results:[]).map(r=>({
+      url:shopHttps(r.url),title:String(r.title||'').slice(0,180),
+      snippet:String(r.snippet||r.summary||'').slice(0,1000),
+      site:String(r.site_name||'').slice(0,90),
+      imageUrl:'',score:Number(r.rerank_score)||0
+    })).filter(r=>r.url);
+  }catch{return [];}
 }
 function productFromSource(source,quantity,budget,inputs) {
   if(!sellerDetailURL(source.url))return null;
@@ -107,13 +136,14 @@ function productFromSource(source,quantity,budget,inputs) {
   const total=price===null?null:Math.round(price*quantity*100)/100;
   return {
     name:source.title||String(inputs.item||'商品').slice(0,100),
-    sourceUrl:source.url,sourceTitle:source.title,site:source.site,
-    imageUrl:source.imageUrl,price,
+    sourceUrl:source.url,sourceTitle:source.title,site:source.site||new URL(source.url).hostname,
+    linkType:'商品详情页', imageUrl:source.imageUrl||'',price,
     priceEvidence:price===null?'':source.snippet.slice(0,220),
-    total,budgetStatus:budget&&total!==null?(total<=budget?'预算范围内':'超出总预算'):'待核实',
-    spec:String(inputs.requirements||source.snippet||'以商品详情为准').slice(0,190),
-    reason:'这是真实联网结果中的商品详情链接，需进一步核对规格与需求是否一致。',
-    verify:'核实实际售价、运费、规格、适用年龄、材料和售后条件。'
+    total,budgetStatus:budget&&total!==null?(total<=budget?'预算范围内':'超出总预算'):'待核价',
+    spec:String(source.snippet||'商品搜索摘要未提供详细规格，请查看商品页面').slice(0,210),
+    reason:'来自实际联网搜索的商品详情页，建议进一步对照购买需求。',
+    verify:'核实材质、规格、适用年龄、运费、库存、真实售价、商家与售后政策。',
+    score:source.score||0
   };
 }
 async function productPageImage(url) {
@@ -145,65 +175,118 @@ async function productPageImage(url) {
   } catch {}
   return '';
 }
+function relevantProduct(p,inputs){
+  const text=(p.name+' '+p.spec).toLowerCase(), wanted=String(inputs.item||'').trim().toLowerCase();
+  // Disqualify an explicit excluded brand or material when text confirms a conflict.
+  const avoid=String(inputs.avoid||'').split(/[、，,；;\/\n]/).map(x=>x.trim().toLowerCase()).filter(x=>x.length>=2);
+  if(avoid.some(x=>text.includes(x)))return false;
+  const tokens=wanted.split(/\s+/).filter(x=>x.length>1);
+  if(tokens.length>1&&!tokens.some(x=>text.includes(x)))return false;
+  return true;
+}
+async function personalizeProducts(products,inputs,env) {
+  const fallback='请核对商品适用对象、实际售价、材质、规格与商家售后，婴幼儿用品尤其注意年龄限制。';
+  if(!products.length)return {conclusion:'没有找到能够核验的具体商品详情链接，请调整搜索关键词或使用下方商城搜索入口。'};
+  const source=products.map((p,i)=>({id:i+1,name:p.name,site:p.site,snippet:p.spec,
+    pagePrice:p.priceEvidence||'未提供',budgetStatus:p.budgetStatus}));
+  const user={
+    item:inputs.item,quantity:inputs.quantity,budget:inputs.budget,target:inputs.target,
+    stage:inputs.stage,age:inputs.age,brands:inputs.brands,
+    requirements:inputs.requirements,avoid:inputs.avoid
+  };
+  try{
+    const res=await fetch('https://api.deepseek.com/chat/completions',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.DEEPSEEK_API_KEY},
+      body:JSON.stringify({model:'deepseek-flash',thinking:{type:'disabled'},max_tokens:850,
+        response_format:{type:'json_object'},
+        messages:[
+          {role:'system',content:'你是专业的中文母婴用品选购助手。只依据给定的商品搜索资料，输出JSON对象：{"reasons":[{"id":1,"reason":"...","verify":"..."}],"conclusion":"..."}。每款用简短、具体的预算、适龄、材质或功能匹配分析。不能编造产品认证、价格、材质、链接、图片或缺少证据的安全承诺。用户限定条件需要认真遵守。'},
+          {role:'user',content:'用户选购需求：'+JSON.stringify(user).slice(0,2200)+'\n候选商品来源：'+JSON.stringify(source).slice(0,4000)}
+        ]}),signal:AbortSignal.timeout(18000)
+    });
+    if(!res.ok)return {conclusion:fallback};
+    const data=await res.json(), raw=String(data?.choices?.[0]?.message?.content||'');
+    const o=JSON.parse(raw);
+    for(const line of Array.isArray(o.reasons)?o.reasons:[]) {
+      const ix=Number(line.id)-1;
+      if(!Number.isInteger(ix)||ix<0||ix>=products.length)continue;
+      if(typeof line.reason==='string')products[ix].reason=line.reason.slice(0,240);
+      if(typeof line.verify==='string')products[ix].verify=line.verify.slice(0,220);
+    }
+    return {conclusion:String(o.conclusion||fallback).slice(0,1100)};
+  }catch{return {conclusion:fallback};}
+}
 async function searchRealProducts(inputs,env,origin) {
   const item=String(inputs.item||'').trim().slice(0,100);
   if(!item)return json({error:'请填写希望购买的商品'},400,origin);
   const quantity=Math.min(99,Math.max(1,Math.floor(Number(inputs.quantity)||1)));
   const budget=Math.max(0,Number(inputs.budget)||0);
-  const query=[item,String(inputs.brands||'').slice(0,35),
-    String(inputs.requirements||'').slice(0,90),'京东 天猫 淘宝 购买'].filter(Boolean).join(' ').slice(0,180);
-  const task='请先真正联网检索中国电商平台正在展示的“'+query+'”相关商品。'+
-    '重点查找实际商品详情页，不要生成或猜测任何商品地址。最多挑选5款商品比较。'+
-    '给出中文简短选购建议和需要核对的规格，不编造价格、库存、认证或图片；'+
-    '如果没有搜到可靠商品，就明确说明找不到。';
-  let response;
+  const query=[item,String(inputs.brands||'').slice(0,30),
+    String(inputs.requirements||'').slice(0,55),'京东 淘宝 天猫 商品 购买'].filter(Boolean).join(' ').slice(0,128);
+  const task='请现在实际联网搜索下面的购物需求，优先查找京东、淘宝、天猫等中国电商的单件商品详情页。'+
+    '要严格满足用途、使用人群、宝宝月龄、禁用材料、品牌、总预算和数量，不要编造链接或价格。'+
+    '\n需求：'+JSON.stringify({item,quantity,budget,brands:inputs.brands,target:inputs.target,
+      stage:inputs.stage,age:inputs.age,requirements:inputs.requirements,avoid:inputs.avoid}).slice(0,1800)+
+    '\n请给出至多五个有根据的候选，以及简洁的选购建议；没有真实结果就说明。';
+  if(!env.DEEPSEEK_API_KEY)return json({error:'未配置 DeepSeek API Key'},503,origin);
+  let response,searchError='';
   try {
     const res=await fetch('https://api.deepseek.com/chat/completions',{
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.DEEPSEEK_API_KEY},
       body:JSON.stringify({
         model:'deepseek-flash',thinking:{type:'disabled'},
-        tools:[{type:'deepseek_web_search'}],
-        max_tokens:950,
+        tools:[{type:'deepseek_web_search'}],max_tokens:1050,
         messages:[
-          {role:'system',content:'你是 MomCare 比赛网站的中文母婴商品选购助手。回答前用联网搜索获得实际来源。只做消费建议，不诊断或承诺产品安全。不要编造商品链接、价格或来源。'},
+          {role:'system',content:'你是 MomCare 比赛网站的商品选购助手。必须联网查询有来源的商品资料。不得捏造价格、商品图、商城地址、产品安全结论。用户填写的要求决定筛选顺序。'},
           {role:'user',content:task}
         ]
-      }),signal:AbortSignal.timeout(45000)
+      }),signal:AbortSignal.timeout(39000)
     });
     if(!res.ok) {
       if(res.status===401)return json({error:'DeepSeek 密钥无效，请管理员检查'},502,origin);
       if(res.status===402)return json({error:'DeepSeek 账户余额不足'},502,origin);
       if(res.status===429)return json({error:'AI 请求过于频繁，请稍后重试'},429,origin);
-      return json({error:'DeepSeek 联网搜索暂不可用（'+res.status+'）'},502,origin);
-    }
-    response=await res.json();
-    if(response?.error) return json({error:'DeepSeek 未能完成联网搜索，请稍后重试'},502,origin);
-  } catch {return json({error:'DeepSeek 联网搜索超时或网络异常'},504,origin);}
-  const sources=sourceRows(response);
-  let products=sources.map(x=>productFromSource(x,quantity,budget,inputs)).filter(Boolean);
-  // Only genuine web-search source URLs qualify. Model-written URLs are ignored.
-  if(budget>0)products.sort((a,b)=>{
-    const priority=p=>p.total===null?1:p.total<=budget?0:2;
-    return priority(a)-priority(b);
+      searchError='联网模型请求未成功';
+    }else response=await res.json();
+  }catch {searchError='联网模型超时';}
+  const rows=sourceRows(response);
+  const direct=rows.map(r=>productFromSource(r,quantity,budget,inputs)).filter(Boolean);
+  // Search API is a low-cost fallback and uses exactly the existing DeepSeek key.
+  // Avoid charging this extra request when native model search already found five items.
+  if(direct.length<MAX_SHOP_ITEMS){
+    const extra=await deepSeekSearchFallback(query,env);
+    const seen=new Set(rows.map(r=>r.url));
+    for(const r of extra)if(!seen.has(r.url)){rows.push(r);seen.add(r.url);}
+  }
+  const seen=new Set();
+  let products=rows.map(r=>productFromSource(r,quantity,budget,inputs))
+    .filter(p=>{
+      if(!p||seen.has(p.sourceUrl)||!relevantProduct(p,inputs))return false;
+      seen.add(p.sourceUrl);return true;
+    });
+  let overBudget=0;
+  if(budget>0){
+    overBudget=products.filter(p=>p.total!==null&&p.total>budget).length;
+    // Known over-budget offers are excluded; unknown prices remain marked "待核价".
+    products=products.filter(p=>p.total===null||p.total<=budget);
+  }
+  products.sort((a,b)=>{
+    const bucket=p=>p.total===null?1:0;
+    return bucket(a)-bucket(b)||Number(b.score||0)-Number(a.score||0);
   });
   products=products.slice(0,MAX_SHOP_ITEMS);
-  // A photo is shown only when returned by search or extracted from that real seller page.
-  await Promise.all(products.map(async p=>{
-    if(!p.imageUrl)p.imageUrl=await productPageImage(p.sourceUrl);
-  }));
-  const rawAdvice=String(response?.choices?.[0]?.message?.content||'').trim();
-  const advice=rawAdvice.replace(/https?:\/\/\S+/g,'（具体链接请见商品卡片）')
-    .slice(0,1100) ||
-    '请按预算与适用年龄核对商品详情。搜索结果不代表实时价格或安全认证。';
+  await Promise.all(products.map(async p=>{if(!p.imageUrl)p.imageUrl=await productPageImage(p.sourceUrl);}));
+  const advice=await personalizeProducts(products,inputs,env);
+  const needs=[item,inputs.target||'',inputs.age?'宝宝月龄 '+inputs.age:'',budget?'总预算 '+budget+' 元':'',
+    '数量 '+quantity,inputs.requirements||'',inputs.avoid?'排除 '+inputs.avoid:'']
+    .filter(Boolean).join('；');
   const out={
-    version:1,kind:'shopping_web',maxResults:MAX_SHOP_ITEMS,
-    searchedAt:new Date().toISOString(),query,
-    needs:[item,budget?'总预算 '+budget+' 元':'','数量 '+quantity,
-      inputs.requirements||''].filter(Boolean).join('；'),
-    products,conclusion:advice,
+    version:1,kind:'shopping_web',maxResults:MAX_SHOP_ITEMS,searchedAt:new Date().toISOString(),
+    query,needs,products,overBudget,conclusion:advice.conclusion||searchError||'已按有来源的商品资料进行对比。',
     searchUrl:'https://search.jd.com/Search?keyword='+encodeURIComponent(item),
-    notice:'仅展示至多5款实际联网搜索中找到的商品详情链接。价格来自搜索摘要，可能已变化；图片可能因商家限制而缺失。请核对商家及产品真实信息。'
+    notice:'真实商品页面来自 DeepSeek 联网搜索，必要时补充 DeepSeek Search API。每次最多五款。网页参考价格、图片、库存可能变化；请打开商家详情核实。来源没有明确标价或图片时不虚构。'
   };
   return json({answer:JSON.stringify(out),source:'deepseek',model:'deepseek-flash',productSource:'deepseek_web_search'},200,origin);
 }
