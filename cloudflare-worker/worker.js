@@ -3,7 +3,7 @@ const AI_TITLES = {
   recovery:'妈妈身心关怀', mental:'孕产期心理状态自评', mood:'妈妈情绪关怀',
   nutrition:'妈妈营养规划', feeding:'喂养支持', visit:'就诊准备',
   return:'生活与职业发展', parent_ai:'AI 育儿顾问', baby_food:'宝宝辅食规划',
-  storybook:'亲子绘本', summary:'互助社区观点摘要', shopping:'智能商品推荐',
+  storybook:'AI 小故事', summary:'互助社区观点摘要', shopping:'智能商品推荐',
   ai_chat:'家庭关怀问答'
 };
 
@@ -325,11 +325,15 @@ export default {
    if(kind==='shopping') return searchRealProducts(inputs,env,origin);
    let detail=JSON.stringify(inputs);
    if(detail.length>6500) detail=detail.slice(0,6500);
-   const prompt = `当前功能：${AI_TITLES[kind]}。\n用户在表单中提供的内容（JSON）：\n${detail}\n请以该功能目标回应。`;
+   const storyLengths={'简短（约150字）':150,'标准（约300字）':300,'稍长（约500字）':500};
+   const isStory=kind==='storybook';
+   const targetLength=storyLengths[inputs.length]||300;
+   const storyGuide=`请只输出一篇完整、原创、适龄的中文小故事，不生成绘本分镜、插图提示词或图片。必须有醒目的故事标题、人物、事件起因、发展与自然结尾。根据用户填写的主角、主题、年龄和启发创作，人物情节连贯，语言生动但不说教。篇幅约${targetLength}个汉字；如提供阅读年龄，控制词汇和情节复杂度。不要声称已生成图片。`;
+   const prompt = `当前功能：${AI_TITLES[kind]}。\n用户在表单中提供的内容（JSON）：\n${detail}\n${isStory?storyGuide:'请以该功能目标回应。'}`;
    try {
      const res=await fetch('https://api.deepseek.com/chat/completions',{
        method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.DEEPSEEK_API_KEY},
-       body: JSON.stringify({model:'deepseek-flash',thinking:{type:'disabled'},max_tokens:800,
+       body: JSON.stringify({model:'deepseek-flash',thinking:{type:'disabled'},max_tokens:isStory?1050:800,
          messages:[{role:'system',content:SYSTEM},{role:'user',content:prompt}]}),
        signal:AbortSignal.timeout(45000)
      });
