@@ -1,7 +1,7 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#fbfaf8"><meta name="description" content="MomCare 第三阶段与第四阶段统一演示。保留智能调度，融合 15 项非重复关怀工具，新增孕产期心理状态自评。"><title>MomCare · 家庭关怀统一体验</title><script>
 /* MomCare 竞赛版配置：只填写 Worker 公共地址。切勿在此填写 DeepSeek API Key。 */
 window.MOMCARE_STATIC = true;
-window.MOMCARE_WORKER_URL = "https://REPLACE_WITH_YOUR_WORKER.workers.dev";
+window.MOMCARE_WORKER_URL = "https://momcare-ai-competition.27894827.workers.dev";
 window.MomCareRealAI = {
   async request(row) {
     const endpoint = String(window.MOMCARE_WORKER_URL || '').trim().replace(/\/+$/, '');
