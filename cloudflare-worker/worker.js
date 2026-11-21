@@ -44,123 +44,168 @@ const SYSTEM = `你是 MomCare 比赛展示项目的中文家庭照护 AI 助手
 对于职业规划，给出可以执行的阶段目标、步骤和风险。你不能替用户实际安排工作或承诺岗位。`;
 
 
-/* Actual product links, photos and price evidence come from search results,
-   never from model-generated URL strings. */
+/* DeepSeek native web search; never fabricate sellers, links, images, prices. */
+const MAX_SHOP_ITEMS = 5;
 function shopHttps(raw) {
   try {
-    const u=new URL(String(raw||''));
-    if(u.protocol!=='https:'||u.username||u.password||!u.hostname.includes('.')||
-       /^(localhost|\d+\.\d+\.\d+\.\d+)$/i.test(u.hostname)) return '';
-    if(u.hostname==='e.cn.miaozhen.com') return shopHttps(u.searchParams.get('o'));
-    if(/(^|\.)baidu\.com$/i.test(u.hostname)&&u.pathname==='/link') return '';
-    return u.href.length<1800?u.href:'';
-  }catch{return '';}
+    const u = new URL(String(raw||''));
+    if (u.protocol!=='https:' || u.username || u.password || !u.hostname.includes('.') ||
+      /^(localhost|127\.|10\.|192\.168\.|169\.254\.)/i.test(u.hostname) ||
+      /^(\d{1,3}\.){3}\d{1,3}$/.test(u.hostname) ||
+      /\.(?:local|internal|localhost)$/i.test(u.hostname)) return '';
+    return u.href.length<=1600 ? u.href : '';
+  } catch { return ''; }
 }
-function actualSellerPage(raw) {
+function sellerDetailURL(url) {
   try {
-    const u=new URL(raw),h=u.hostname.toLowerCase(),p=u.pathname;
-    if(h==='item.jd.com')return /^\/\d+\.html/i.test(p);
-    if(h==='item.taobao.com'||h==='detail.tmall.com')return /item\.htm/i.test(p);
-    if(h==='m.mi.com')return /commodity\/detail/i.test(p);
-    if(h.endsWith('.suning.com'))return /\/\d+\.html/i.test(p);
-    if(h==='detail.1688.com')return /offer\//i.test(p);
-    if(h==='www.amazon.cn')return /\/dp\//i.test(p);
+    const u=new URL(url);
+    const h=u.hostname.toLowerCase(),p=u.pathname;
+    if(h==='item.jd.com') return /^\/\d+\.html$/i.test(p);
+    if(h==='item.m.jd.com'||h==='item.m.jd.com') return /\/product\/\d+\.html/i.test(p);
+    if(h==='item.taobao.com'||h==='detail.tmall.com') return /\/item\.htm/i.test(p)&&u.searchParams.has('id');
+    if(h==='mobile.yangkeduo.com') return /goods\.html/i.test(p)&&u.searchParams.has('goods_id');
+    if(h==='detail.1688.com') return /\/offer\/\d+\.html/i.test(p);
+    if(h==='product.suning.com') return /\/\d+\/\d+\.html/i.test(p);
+    if(h==='product.dangdang.com') return /\/\d+\.html/i.test(p);
+    if(h==='www.amazon.cn'||h==='www.amazon.com') return /\/(?:dp|gp\/product)\//i.test(p);
+    if(h==='m.mi.com') return /\/commodity\/detail\//i.test(p);
     return false;
-  }catch{return false;}
+  } catch { return false; }
 }
-function yuanPrice(raw) {
-  const s=String(raw??'');
-  if(!/[¥￥]|(?:^|\s)人民币|\d\s*元/.test(s))return null;
-  const m=s.match(/(?:[¥￥]\s*|人民币\s*)([\d,]+(?:\.\d{1,2})?)/)||
-          s.match(/([\d,]+(?:\.\d{1,2})?)\s*元/);
+function yuanPrice(snippet) {
+  const s=String(snippet||'');
+  const m=s.match(/(?:[¥￥]\s*|人民币\s*)([\d,]+(?:\.\d{1,2})?)/) ||
+    s.match(/([\d,]+(?:\.\d{1,2})?)\s*元/);
   if(!m)return null;
   const n=Number(m[1].replace(/,/g,''));
-  return Number.isFinite(n)&&n>0&&n<10000000?n:null;
+  return Number.isFinite(n)&&n>0&&n<1000000?n:null;
 }
-function makeShopProduct(r,inputs,quantity,isShoppingListing) {
-  const sourceUrl=shopHttps(r.link||r.product_link||r.url);
-  if(!sourceUrl||(!isShoppingListing&&!actualSellerPage(sourceUrl)))return null;
-  const name=String(r.title||'').trim().slice(0,170);
-  if(!name)return null;
-  const imageUrl=shopHttps(r.thumbnail||r.image||r.image_url||r.imageUrl||r.serpapi_thumbnail);
-  const priceEvidence=String(r.price||'').trim().slice(0,90);
-  const price=yuanPrice(priceEvidence), budget=Number(inputs.budget)||0;
+function sourceRows(response) {
+  const calls=response?.choices?.[0]?.message?.server_tool_calls||[];
+  const out=[],seen=new Set();
+  for(const call of calls) {
+    const sources=Array.isArray(call.sources)?call.sources:
+      Array.isArray(call?.result?.sources)?call.result.sources:[];
+    for(const source of sources) {
+      const url=shopHttps(source.url);
+      if(!url||seen.has(url))continue;
+      seen.add(url);
+      out.push({
+        url, title:String(source.title||'').replace(/<[^>]*>/g,'').slice(0,160),
+        snippet:String(source.snippet||'').replace(/<[^>]*>/g,'').slice(0,700),
+        site:String(source.site_name||new URL(url).hostname).slice(0,80),
+        imageUrl:shopHttps(source.image_url)
+      });
+      if(out.length>=40)return out;
+    }
+  }
+  return out;
+}
+function productFromSource(source,quantity,budget,inputs) {
+  if(!sellerDetailURL(source.url))return null;
+  const price=yuanPrice(source.snippet);
   const total=price===null?null:Math.round(price*quantity*100)/100;
   return {
-    name,sourceTitle:name,sourceUrl,imageUrl,
-    site:String(r.source||new URL(sourceUrl).hostname).slice(0,90),
-    spec:String(r.snippet||inputs.requirements||'以商家商品详情标注为准').slice(0,220),
-    price,priceEvidence,total,
-    budgetStatus:budget&&total!==null?(total>budget?'高于总预算':'预算范围内'):'页面参考商品',
-    reason:'真实搜索结果中的商品候选，请核对材质、适用年龄与产品规格。',
-    verify:[inputs.avoid?'避开：'+String(inputs.avoid).slice(0,80):'',
-      '核实规格、实际售价、适用年龄、认证、发货与退货政策'].filter(Boolean).join('；')
+    name:source.title||String(inputs.item||'商品').slice(0,100),
+    sourceUrl:source.url,sourceTitle:source.title,site:source.site,
+    imageUrl:source.imageUrl,price,
+    priceEvidence:price===null?'':source.snippet.slice(0,220),
+    total,budgetStatus:budget&&total!==null?(total<=budget?'预算范围内':'超出总预算'):'待核实',
+    spec:String(inputs.requirements||source.snippet||'以商品详情为准').slice(0,190),
+    reason:'这是真实联网结果中的商品详情链接，需进一步核对规格与需求是否一致。',
+    verify:'核实实际售价、运费、规格、适用年龄、材料和售后条件。'
   };
 }
-async function searchRealProducts(inputs,env,origin){
-  if(!env.SERPAPI_KEY)return json({error:'未配置商品搜索密钥 SERPAPI_KEY。请管理员在 Cloudflare 的 Variables and Secrets 中添加。'},503,origin);
-  const item=String(inputs.item||'').trim().slice(0,100);
-  if(!item)return json({error:'请先填写希望购买的商品'},400,origin);
-  const quantity=Math.min(99,Math.max(1,Math.floor(Number(inputs.quantity)||1)));
-  // No family names, medical stages or files leave for the shopping search API.
-  const query=[item,String(inputs.brands||'').slice(0,30),
-    String(inputs.requirements||'').slice(0,50),'购买'].filter(Boolean).join(' ').slice(0,140);
-  const api=new URL('https://serpapi.com/search.json');
-  api.searchParams.set('engine','baidu');
-  api.searchParams.set('q',query);
-  api.searchParams.set('device','mobile');
-  api.searchParams.set('api_key',String(env.SERPAPI_KEY));
-  let raw;
-  try{
-    const res=await fetch(api.toString(),{signal:AbortSignal.timeout(18000)});
-    if(!res.ok)return json({error:'商品搜索服务暂不可用（HTTP '+res.status+'）'},502,origin);
-    raw=await res.json();
-    if(raw.error)return json({error:'商品搜索接口返回错误，请检查密钥或搜索额度'},502,origin);
-  }catch{return json({error:'商品搜索超时，请稍后重试'},504,origin);}
-  const found=[],seen=new Set();
-  for(const group of [[raw.shopping_results,true],[raw.organic_results,false]]){
-    const rows=Array.isArray(group[0])?group[0]:[];
-    for(const r of rows){
-      const p=makeShopProduct(r,inputs,quantity,group[1]);
-      if(!p||seen.has(p.sourceUrl))continue;
-      found.push(p);seen.add(p.sourceUrl);
-      if(found.length>=7)break;
+async function productPageImage(url) {
+  if(!sellerDetailURL(url))return '';
+  try {
+    const res=await fetch(url,{redirect:'manual',signal:AbortSignal.timeout(3500),headers:{Accept:'text/html'}});
+    if(res.status!==200||!/text\/html/i.test(res.headers.get('Content-Type')||''))return '';
+    const reader=res.body?.getReader();
+    if(!reader)return '';
+    const decoder=new TextDecoder();let markup='',count=0;
+    try {
+      while(count<100000){
+        const {done,value}=await reader.read();
+        if(done)break;
+        const bytes=value.subarray(0,Math.max(0,100000-count));
+        markup+=decoder.decode(bytes,{stream:true});count+=bytes.length;
+        if(markup.includes('og:image'))break;
+      }
+    } finally {await reader.cancel().catch(()=>{});}
+    const tags=markup.match(/<meta\b[^>]*>/gi)||[];
+    for(const tag of tags.slice(0,150)) {
+      if(!/(?:property|name)\s*=\s*["'](?:og:image|twitter:image)["']/i.test(tag))continue;
+      const match=tag.match(/\bcontent\s*=\s*["']([^"']+)["']/i);
+      if(match) {
+        const image=shopHttps(match[1].replace(/&amp;/g,'&'));
+        if(image)return image;
+      }
     }
-    if(found.length>=7)break;
-  }
-  const budget=Number(inputs.budget)||0;
-  if(budget>0)found.sort((a,b)=>{
-    const bucket=x=>x.total===null?1:x.total<=budget?0:2;
-    return bucket(a)-bucket(b);
-  });
-  const details=found.length?found.map((p,i)=>
-    String(i+1)+'. '+p.name+'；商家 '+p.site+'；网页标价 '+(p.priceEvidence||'暂无') 
-  ).join('\n'):'没有找到可核实的具体商品详情链接。';
-  let advice='请在商品页核实商家资质、材质、适用年龄、实际标价与售后条件。';
-  try{
+  } catch {}
+  return '';
+}
+async function searchRealProducts(inputs,env,origin) {
+  const item=String(inputs.item||'').trim().slice(0,100);
+  if(!item)return json({error:'请填写希望购买的商品'},400,origin);
+  const quantity=Math.min(99,Math.max(1,Math.floor(Number(inputs.quantity)||1)));
+  const budget=Math.max(0,Number(inputs.budget)||0);
+  const query=[item,String(inputs.brands||'').slice(0,35),
+    String(inputs.requirements||'').slice(0,90),'京东 天猫 淘宝 购买'].filter(Boolean).join(' ').slice(0,180);
+  const task='请先真正联网检索中国电商平台正在展示的“'+query+'”相关商品。'+
+    '重点查找实际商品详情页，不要生成或猜测任何商品地址。最多挑选5款商品比较。'+
+    '给出中文简短选购建议和需要核对的规格，不编造价格、库存、认证或图片；'+
+    '如果没有搜到可靠商品，就明确说明找不到。';
+  let response;
+  try {
     const res=await fetch('https://api.deepseek.com/chat/completions',{
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.DEEPSEEK_API_KEY},
-      body:JSON.stringify({model:'deepseek-flash',thinking:{type:'disabled'},max_tokens:320,
+      body:JSON.stringify({
+        model:'deepseek-flash',thinking:{type:'disabled'},
+        tools:[{type:'deepseek_web_search'}],
+        max_tokens:950,
         messages:[
-          {role:'system',content:'你是母婴用品选购助手。根据真实商品搜索结果给出简短中文购买建议。不能编造链接、价格、库存、认证或未提供的产品规格。未找到商品时说明如何调整搜索关键词。'},
-          {role:'user',content:'用户需求：'+JSON.stringify({item:inputs.item,budget:inputs.budget,quantity,requirements:inputs.requirements,avoid:inputs.avoid})+'\n搜索候选：\n'+details}
-        ]}),
-      signal:AbortSignal.timeout(20000)
+          {role:'system',content:'你是 MomCare 比赛网站的中文母婴商品选购助手。回答前用联网搜索获得实际来源。只做消费建议，不诊断或承诺产品安全。不要编造商品链接、价格或来源。'},
+          {role:'user',content:task}
+        ]
+      }),signal:AbortSignal.timeout(45000)
     });
-    if(res.ok){
-      const data=await res.json();
-      advice=String(data?.choices?.[0]?.message?.content||'').trim().slice(0,1200)||advice;
+    if(!res.ok) {
+      if(res.status===401)return json({error:'DeepSeek 密钥无效，请管理员检查'},502,origin);
+      if(res.status===402)return json({error:'DeepSeek 账户余额不足'},502,origin);
+      if(res.status===429)return json({error:'AI 请求过于频繁，请稍后重试'},429,origin);
+      return json({error:'DeepSeek 联网搜索暂不可用（'+res.status+'）'},502,origin);
     }
-  }catch{/* Search-based results remain usable if AI summary is unavailable. */}
-  const result={
-    version:1,kind:'shopping_web',searchedAt:new Date().toISOString(),query,
-    needs:[item,budget?'预算 '+budget+' 元':'','数量 '+quantity,inputs.requirements||''].filter(Boolean).join('；'),
-    products:found,conclusion:advice,
+    response=await res.json();
+    if(response?.error) return json({error:'DeepSeek 未能完成联网搜索，请稍后重试'},502,origin);
+  } catch {return json({error:'DeepSeek 联网搜索超时或网络异常'},504,origin);}
+  const sources=sourceRows(response);
+  let products=sources.map(x=>productFromSource(x,quantity,budget,inputs)).filter(Boolean);
+  // Only genuine web-search source URLs qualify. Model-written URLs are ignored.
+  if(budget>0)products.sort((a,b)=>{
+    const priority=p=>p.total===null?1:p.total<=budget?0:2;
+    return priority(a)-priority(b);
+  });
+  products=products.slice(0,MAX_SHOP_ITEMS);
+  // A photo is shown only when returned by search or extracted from that real seller page.
+  await Promise.all(products.map(async p=>{
+    if(!p.imageUrl)p.imageUrl=await productPageImage(p.sourceUrl);
+  }));
+  const rawAdvice=String(response?.choices?.[0]?.message?.content||'').trim();
+  const advice=rawAdvice.replace(/https?:\/\/\S+/g,'（具体链接请见商品卡片）')
+    .slice(0,1100) ||
+    '请按预算与适用年龄核对商品详情。搜索结果不代表实时价格或安全认证。';
+  const out={
+    version:1,kind:'shopping_web',maxResults:MAX_SHOP_ITEMS,
+    searchedAt:new Date().toISOString(),query,
+    needs:[item,budget?'总预算 '+budget+' 元':'','数量 '+quantity,
+      inputs.requirements||''].filter(Boolean).join('；'),
+    products,conclusion:advice,
     searchUrl:'https://search.jd.com/Search?keyword='+encodeURIComponent(item),
-    notice:'商品链接、图片、网页标价来自真实搜索结果，可能包含广告；实际售价、库存、适龄和认证以商家页面为准。没有结果时不编造商品。'
+    notice:'仅展示至多5款实际联网搜索中找到的商品详情链接。价格来自搜索摘要，可能已变化；图片可能因商家限制而缺失。请核对商家及产品真实信息。'
   };
-  return json({answer:JSON.stringify(result),source:'deepseek',model:'deepseek-flash',productSource:'serpapi_baidu'},200,origin);
+  return json({answer:JSON.stringify(out),source:'deepseek',model:'deepseek-flash',productSource:'deepseek_web_search'},200,origin);
 }
 
 export default {
