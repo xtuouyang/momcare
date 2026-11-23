@@ -6,34 +6,24 @@ window.MomCareRealAI = {
   async request(row) {
     const endpoint = String(window.MOMCARE_WORKER_URL || '').trim().replace(/\/+$/, '');
     if (!endpoint.startsWith('https://') || endpoint.includes('REPLACE_WITH_YOUR_WORKER')) {
-      throw Error('请先将 index.html 顶部的 MOMCARE_WORKER_URL 修改为真实 Cloudflare Worker 地址');
+      throw Error('尚未配置 Cloudflare Worker 地址');
     }
-    let code = sessionStorage.getItem('momcare_judge_code') || '';
-    if (!code) {
-      code = (prompt('请输入 MomCare 比赛 AI 体验码（由网站创建者提供）') || '').trim();
-      if (!code) throw Error('未输入 AI 体验码，已取消请求');
-      sessionStorage.setItem('momcare_judge_code', code);
+    let response;
+    try {
+      response = await fetch(endpoint + '/api/chat', {
+        method: 'POST',
+        mode: 'cors',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: row.kind, inputs: row.inputs })
+      });
+    } catch (e) {
+      throw Error('无法连接 AI 服务，请检查 Worker 地址、部署状态与允许来源配置');
     }
-    async function call() {
-      let response;
-      try {
-        response = await fetch(endpoint + '/api/chat', {
-          method: 'POST', mode: 'cors',
-          headers: { 'Content-Type': 'application/json', 'X-MomCare-Code': code },
-          body: JSON.stringify({kind: row.kind, inputs: row.inputs})
-        });
-      } catch(e) { throw Error('无法连接 AI 服务，请检查 Worker URL 与允许来源配置'); }
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        if (response.status === 401 || response.status === 403) sessionStorage.removeItem('momcare_judge_code');
-        throw Error(body.error || ('AI 请求失败，状态码 ' + response.status));
-      }
-      if (!body.answer || body.source !== 'deepseek') throw Error('AI 返回内容不完整');
-      return body.answer;
-    }
-    return await call();
-  },
-  resetCode() { sessionStorage.removeItem('momcare_judge_code'); alert('体验码已清除，下次调用 AI 时重新输入。'); }
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw Error(body.error || ('AI 请求失败，状态码 ' + response.status));
+    if (!body.answer || body.source !== 'deepseek') throw Error('AI 返回内容不完整');
+    return body.answer;
+  }
 };
 </script>
 <style>
@@ -862,5 +852,5 @@ if(demoEntry&&byFeature[demoEntry]&&!byFeature[demoEntry].legacy&&demoEntry!=='c
 #mc-judge-config{position:fixed;z-index:1000;right:16px;bottom:14px;display:flex;gap:8px;align-items:center;padding:9px 12px;background:#f4f9f4;border:1px solid #d8e8d9;border-radius:14px;color:#415f50;box-shadow:0 6px 20px #273e3020;font-size:12px}
 #mc-judge-config button{background:white;border:1px solid #cadcca;border-radius:8px;padding:5px 8px;color:#415f50;font-size:12px}
 @media(max-width:650px){#mc-judge-config{left:12px;right:12px;bottom:8px;justify-content:center}}
-</style><div id="mc-judge-config" role="note"><strong>真实 DeepSeek AI</strong><span>竞赛体验 · 本地数据</span><button type="button" onclick="window.MomCareRealAI.resetCode()">更换体验码</button></div>
+</style><div id="mc-judge-config" role="note"><strong>真实 DeepSeek AI</strong><span>公开体验 · 无需密码 · 本地数据</span></div>
 </body></html>
