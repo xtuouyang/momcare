@@ -285,6 +285,84 @@ async function searchRealProducts(inputs,env,origin) {
   return json({answer:JSON.stringify(out),source:'deepseek',model:'deepseek-flash',productSource:'deepseek_web_search'},200,origin);
 }
 
+/* Structured lifestyle and career planning for reliable personal-plan import. */
+const CAREER_MODES = ['daily','career','returnwork','learning','balance','goals'];
+function validCareerDay(s){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(String(s||'')))return '';
+  const d=new Date(s+'T00:00:00Z');
+  return Number.isFinite(+d)&&d.toISOString().slice(0,10)===s?s:'';
+}
+function validCareerTime(s){return /^([01]\d|2[0-3]):[0-5]\d$/.test(String(s||''))?s:'';}
+function cleanCareerText(v,n=250){return String(v??'').trim().slice(0,n);}
+async function generateCareerPlan(inputs,env,origin){
+  const goal=cleanCareerText(inputs.goal,450);
+  if(!goal)return json({error:'请填写本次规划目标'},400,origin);
+  const mode=CAREER_MODES.includes(inputs.plan_mode)?inputs.plan_mode:'daily';
+  const startDate=validCareerDay(inputs.date)||new Date().toISOString().slice(0,10);
+  const start=validCareerTime(inputs.plan_start)||'19:00';
+  const minutesIntoDay=Number(start.slice(0,2))*60+Number(start.slice(3));
+  const maxMinutes=Math.min(480,1440-minutesIntoDay);
+  if(maxMinutes<5)return json({error:'计划开始时间过晚，请提前至少五分钟'},400,origin);
+  const duration=Math.max(5,Math.min(maxMinutes,Math.floor(Number(inputs.plan_minutes)||45)));
+  const allowed=['personal','rest','learning','career','family'];
+  const allowedModes={daily:'日常生活规划',career:'职业发展规划',returnwork:'职场回归计划',learning:'个人能力提升',balance:'生活职业平衡',goals:'我的目标'};
+  const prompt='根据用户的真实情况，为生活与职业发展生成可执行的短期行动计划。'+
+    '输出且只输出一个 JSON 对象，结构为 {"summary":"约100至220字的整体建议","steps":[{"title":"不超过35字的可执行任务","note":"具体步骤、注意事项及完成标准","category":"career"}]}。'+
+    '请给出4至6项具体且不重复的步骤。category仅允许 personal, rest, learning, career, family。'+
+    '根据用户的选择聚焦其最重要目标，尊重育儿与休息时间，不承诺招聘岗位、补贴或医学效果。'+
+    '日期和时长将由系统安排，请不要在标题中编造具体日期。'+
+    '\n模块：'+allowedModes[mode]+'\n用户已填写信息：'+JSON.stringify(inputs).slice(0,3600);
+  let ai;
+  try {
+    const response=await fetch('https://api.deepseek.com/chat/completions',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.DEEPSEEK_API_KEY},
+      body:JSON.stringify({
+        model:'deepseek-flash',thinking:{type:'disabled'},max_tokens:1450,
+        response_format:{type:'json_object'},
+        messages:[
+          {role:'system',content:'你是中文生活与职业规划助手。严格输出 JSON，不使用 Markdown 代码围栏。给出有优先级、具体可执行、合理可完成的步骤，避免笼统建议。'},
+          {role:'user',content:prompt}
+        ]
+      }),signal:AbortSignal.timeout(45000)
+    });
+    if(!response.ok){
+      if(response.status===401)return json({error:'DeepSeek API Key 无效'},502,origin);
+      if(response.status===402)return json({error:'DeepSeek 账户额度不足'},502,origin);
+      if(response.status===429)return json({error:'DeepSeek 请求过于频繁，请稍后重试'},429,origin);
+      return json({error:'规划生成暂不可用（'+response.status+'）'},502,origin);
+    }
+    const result=await response.json();
+    const raw=cleanCareerText(result?.choices?.[0]?.message?.content,12000);
+    ai=JSON.parse(raw);
+  }catch{
+    return json({error:'规划生成超时或结果格式有误，请点击重新生成'},502,origin);
+  }
+  const candidates=Array.isArray(ai?.steps)?ai.steps:[];
+  const date0=new Date(startDate+'T00:00:00Z');
+  const steps=[],titles=new Set();
+  for(const x of candidates){
+    const title=cleanCareerText(x?.title,80);
+    if(!title||titles.has(title))continue;
+    titles.add(title);
+    const d=new Date(+date0+steps.length*86400000).toISOString().slice(0,10);
+    steps.push({
+      title,date:d,start,minutes:duration,
+      category:allowed.includes(x?.category)?x.category:(mode==='career'||mode==='returnwork'?'career':mode==='learning'?'learning':'personal'),
+      note:cleanCareerText(x?.note,500)||'完成此事项后记录结果并评估下一步。',
+      done:false
+    });
+    if(steps.length===6)break;
+  }
+  if(!steps.length)return json({error:'本次规划未生成可导入的具体事项，请重新生成'},502,origin);
+  const plan={
+    kind:'career_plan',mode,summary:cleanCareerText(ai.summary,3000)||'以下计划可逐条或批量导入个人日程，导入后可自行调整。',
+    steps,resources:[],searchStatus:'本次未进行实时岗位、课程或政策检索，请核验具体来源。',
+    searchedAt:''
+  };
+  return json({answer:JSON.stringify(plan),source:'deepseek',model:'deepseek-flash'},200,origin);
+}
+
 export default {
  async fetch(req, env) {
    const url = new URL(req.url);
@@ -316,6 +394,7 @@ export default {
    const inputs = sanitizeInputs(body?.inputs);
    if(!inputs || Object.keys(inputs).length===0) return json({error:'请先输入内容'},400,origin);
    if(kind==='shopping') return searchRealProducts(inputs,env,origin);
+   if(kind==='return') return generateCareerPlan(inputs,env,origin);
    let detail=JSON.stringify(inputs);
    if(detail.length>6500) detail=detail.slice(0,6500);
    const storyLengths={'简短（约150字）':150,'标准（约300字）':300,'稍长（约500字）':500};
