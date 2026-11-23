@@ -12,16 +12,10 @@ function json(data, status=200, origin='') {
     'X-Content-Type-Options':'nosniff','Vary':'Origin'};
   if(origin) {
     headers['Access-Control-Allow-Origin']=origin;
-    headers['Access-Control-Allow-Headers']='Content-Type, X-MomCare-Code';
+    headers['Access-Control-Allow-Headers']='Content-Type';
     headers['Access-Control-Allow-Methods']='POST, OPTIONS';
   }
   return new Response(JSON.stringify(data),{status,headers});
-}
-function exactEqual(a,b) {
-  if(typeof a!=='string'||typeof b!=='string'||!b||a.length!==b.length) return false;
-  let diff=0;
-  for(let i=0;i<a.length;i++) diff |= (a.charCodeAt(i) ^ b.charCodeAt(i));
-  return diff===0;
 }
 function sanitizeInputs(obj) {
   if(!obj||typeof obj!=='object'||Array.isArray(obj)) return null;
@@ -299,15 +293,14 @@ export default {
    const origin = allowed && reqOrigin === allowed ? reqOrigin : '';
    if(url.pathname==='/health' && req.method==='GET') return json({ok:true,service:'MomCare AI gateway'},200,origin);
    if(url.pathname!=='/api/chat') return json({error:'路径不存在'},404,origin);
-   if(reqOrigin && !origin) return json({error:'请求来源未授权，请检查 ALLOWED_ORIGIN'},403);
+   if(!origin && url.pathname==='/api/chat') return json({error:'请求来源未授权，请检查 ALLOWED_ORIGIN'},403);
    if(req.method==='OPTIONS') return new Response(null,{status:204,headers:{
-     'Access-Control-Allow-Origin':origin,'Access-Control-Allow-Headers':'Content-Type, X-MomCare-Code',
+     'Access-Control-Allow-Origin':origin,'Access-Control-Allow-Headers':'Content-Type',
      'Access-Control-Allow-Methods':'POST, OPTIONS','Access-Control-Max-Age':'3600','Vary':'Origin'
    }});
    if(req.method!=='POST') return json({error:'仅支持 POST'},405,origin);
-   if(!env.DEEPSEEK_API_KEY || !env.ACCESS_CODE || !allowed) return json({error:'服务尚未完成密钥或来源配置'},503,origin);
-   const submitted = req.headers.get('X-MomCare-Code') || '';
-   if(!exactEqual(submitted,env.ACCESS_CODE)) return json({error:'体验码错误，请点击页面右下角更换体验码'},401,origin);
+   if(!env.DEEPSEEK_API_KEY || !allowed) return json({error:'服务尚未完成 DeepSeek 密钥或允许来源配置'},503,origin);
+   // 公开比赛体验，无需访问码。保留来源检查与可选的 Cloudflare AI_LIMITER 限流。
    if(Number(req.headers.get('Content-Length') || 0) > 12000) return json({error:'输入内容太长'},413,origin);
    // Optional Cloudflare Rate Limiting binding, recommended in wrangler.jsonc.
    if(env.AI_LIMITER) {
