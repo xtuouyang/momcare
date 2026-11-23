@@ -313,10 +313,57 @@ function minute(v){return Number(v.slice(0,2))*60+Number(v.slice(3));}
 function step(x){if(!x||!cut(x.title,80))throw Error('请填写计划事项');const date=day(x.date),start=time(x.start),minutes=Number(x.minutes);if(!date||!start||!Number.isInteger(minutes)||minutes<5||minutes>480||minute(start)+minutes>1440)throw Error('请检查日期、开始时间与时长（5 至 480 分钟，不跨午夜）');return {title:cut(x.title,80),date,start,minutes,category:['learning','career','personal','rest','family'].includes(x.category)?x.category:'personal',note:cut(x.note,500),done:x.done===true};}
 function safeUrl(v){try{const u=new URL(v);return u.protocol==='https:'&&!u.username&&!u.password&&u.hostname.includes('.')?u.href:'';}catch{return '';}}
 function parse(raw){try{const v=typeof raw==='string'?JSON.parse(raw):raw;if(v?.kind!=='career_plan'||!modes.includes(v.mode)||!Array.isArray(v.steps))return null;const steps=[];for(const s of v.steps.slice(0,12))try{steps.push(step(s));}catch{}return {kind:'career_plan',mode:v.mode,summary:cut(v.summary,3500),steps,resources:(Array.isArray(v.resources)?v.resources:[]).slice(0,8).map(r=>({url:safeUrl(r.url),title:cut(r.title,180),snippet:cut(r.snippet,300)})).filter(r=>r.url&&r.title),searchStatus:cut(v.searchStatus,200),searchedAt:cut(v.searchedAt,40)};}catch{return null;}}
+/* Convert completed free-form AI planning replies into editable schedule entries. */
+function importable(raw,inputs={}){
+ const structured=parse(raw);
+ if(structured?.steps?.length)return structured;
+ const plain=String(raw||'').trim();
+ if(!plain)return null;
+ const lines=plain.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+ const numbered=[],headings=[];
+ function clean(v){
+   return String(v||'').replace(/^\*{1,2}|\*{1,2}$/g,'').replace(/^[#>]+\s*/,'')
+     .replace(/\*\*/g,'').replace(/\[(.*?)\]\([^)]*\)/g,'$1').trim();
+ }
+ for(const line of lines){
+   if(/^\|/.test(line)||/^\x60{3}/.test(line))continue;
+   const numberedMatch=line.match(/^(?:#{1,4}\s*)?(?:(?:\d{1,2})[.、．)）]\s*|[一二三四五六七八九十]+[、.．]\s*|[-*•]\s+|第[一二三四五六七八九十0-9]+(?:步|阶段|周|天)[：:\s]*)\s*(.+)$/);
+   const headerMatch=line.match(/^#{1,5}\s+(.+)$/);
+   if(numberedMatch){
+     const v=clean(numberedMatch[1]);
+     if(v.length>=3&&v.length<=420)numbered.push(v);
+   }else if(headerMatch){
+     const v=clean(headerMatch[1]);
+     if(v.length>=3&&v.length<=180&&!/^(?:总结|注意事项|参考|结语|资源|备注|免责声明|行动方案)$/.test(v))headings.push(v);
+   }
+ }
+ const selected=(numbered.length?numbered:headings).slice(0,10);
+ if(!selected.length){
+   const sentences=plain.replace(/^#{1,5}\s+/gm,'').split(/[。！？\n]+/)
+     .map(clean).filter(x=>x.length>=8&&x.length<=260);
+   selected.push(...sentences.slice(0,6));
+ }
+ if(!selected.length)selected.push(clean(inputs.goal||plain.slice(0,120)));
+ const startDay=day(inputs.date)||today();
+ const start=time(inputs.plan_start)||'19:00';
+ const minutes=Math.max(5,Math.min(480,Math.floor(Number(inputs.plan_minutes)||30),1440-minute(start)));
+ const mode=modes.includes(inputs.plan_mode)?inputs.plan_mode:'daily';
+ const category=mode==='career'||mode==='returnwork'?'career':mode==='learning'?'learning':mode==='balance'?'family':'personal';
+ const steps=selected.slice(0,10).map((part,index)=>{
+   const date=new Date(startDay+'T00:00:00Z');date.setUTCDate(date.getUTCDate()+index);
+   const trimmed=clean(part);
+   return step({
+     title:trimmed.slice(0,80),date:date.toISOString().slice(0,10),
+     start,minutes,category,note:trimmed.slice(0,500)
+   });
+ });
+ return {kind:'career_plan',mode,summary:plain.slice(0,3500),steps,resources:[],
+   searchStatus:'原规划保持不变；导入日程按照填写的日期和时间进行估算。'};
+}
 function sample(input){const mode=modes.includes(input.plan_mode)?input.plan_mode:'daily';const date=day(input.date)||today();const start=time(input.plan_start)||'09:00';const max=Math.max(5,Math.min(480,Number(input.plan_minutes)||30,1440-minute(start)));const steps=[];if(max>=5)steps.push({title:cut(input.goal||names[mode],80),date,start,minutes:Math.floor(max),category:mode==='learning'?'learning':mode==='career'||mode==='returnwork'?'career':'personal',note:'先确认时间安排，再完成一个可执行的小步骤。',done:false});return JSON.stringify({kind:'career_plan',mode,summary:'本地演示模板，不是 AI 生成。根据目标梳理优先级，保留休息与个人选择空间。先明确一个可行步骤，再根据实际情况调整。',steps,resources:[],searchStatus:'离线演示不查询真实招聘、课程或政策。'});}
 function markup(p){if(!p)return '';return `<div class="cp-result"><p class="cp-summary">${esc(p.summary)}</p><h3>可执行行动方案</h3>${p.steps.length?`<div class="mcai-actions"><button type="button" class="mcai-btn" data-ai-act="import-all-plans">一键导入全部计划（${p.steps.length}项）</button><button type="button" class="mcai-btn secondary" data-ai-act="open-career-plan">查看我的个人计划</button></div>`:''}${p.steps.length?p.steps.map((s,i)=>`<article class="cp-result-step"><strong>${esc(s.title)}</strong><p>${esc(s.date)} · ${esc(s.start)} · ${s.minutes} 分钟</p><p>${esc(s.note)}</p><button type="button" class="mcai-btn secondary" data-ai-act="import-plan" data-index="${i}">导入此项</button></article>`).join(''):'<p>本次回复没有可导入的时间安排，请重新生成规划。</p>'}<h3>联网资源与政策来源</h3><p>${esc(p.searchStatus)} ${p.searchedAt?'查询时间：'+esc(p.searchedAt):''}</p>${p.resources.map(r=>`<article class="cp-source"><a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.title)}</a><p>${esc(r.snippet)}</p></article>`).join('')}<p>岗位、课程和政策以来源页面为准，不保证仍开放或适用。导入后可编辑，家庭协作需要另行确认。</p></div>`;}
 function stats(rows,from=today()){const end=new Date(from+'T00:00:00Z'),first=new Date(+end-6*86400000);const dates=Array.from({length:7},(_,i)=>new Date(+first+i*86400000).toISOString().slice(0,10));const completed=rows.filter(r=>r.done&&dates.includes(r.date));const sum=c=>completed.filter(r=>c.includes(r.category)).reduce((n,r)=>n+Number(r.minutes),0);return {learning:sum(['learning']),personal:sum(['personal','rest']),career:sum(['career']),done:completed.length,total:rows.filter(r=>dates.includes(r.date)).length,days:dates.map(d=>({date:d,minutes:completed.filter(r=>r.date===d&&r.category==='learning').reduce((n,r)=>n+r.minutes,0)}))};}
-g.MomCareCareerPlan={names,modes,step,day,time,today,minute,parse,sample,markup,stats};
+g.MomCareCareerPlan={names,modes,step,day,time,today,minute,parse,importable,sample,markup,stats};
 })(typeof window==='undefined'?globalThis:window);
 
 </script><script>
@@ -338,10 +385,10 @@ function field([k,label,type='text',vals='']){return `<label class="cp-field">${
 function planForm(mode){return `<form id="career-form" class="cp-form"><div class="cp-fields">${field(['stage','当前阶段','select','备孕期|孕早期|孕中期|孕晚期|产后早期|产后恢复期|长期育儿阶段|其他'])}<label class="cp-field">本次目标（必填）<textarea name="goal" rows="2" maxlength="500" required></textarea></label><label class="cp-field">计划开始日期<input name="date" type="date" value="${P.today()}" required></label><label class="cp-field">希望安排的开始时间<input name="plan_start" type="time" value="19:00" required></label><label class="cp-field">每日可支配时间（分钟）<input name="plan_minutes" type="number" min="5" max="480" value="60" required></label>${fields[mode].map(field).join('')}</div><details class="cp-details" ${['career','learning','returnwork'].includes(mode)?'open':''}><summary>联网资源查询（选填）</summary><p>仅公开搜索关键词与地区发往搜索接口。请不要填写姓名、电话、简历中的信息或其他私人资料。</p><div class="cp-fields">${field(['resource_type','资源类型','select','不查询|招聘岗位|学习课程|劳动权益'])}${field(['resource_keyword','公开资源关键词'])}${field(['resource_region','查询地区'])}</div></details><label class="cp-check"><input type="checkbox" name="consent" required> 同意将我填写的内容及选定附件发送给 DeepSeek，自动保存输入和回复（演示版不联网）。</label><button class="cp-btn" type="submit">生成规划并保存</button></form>`;}
 function stepForm(s={}){return `<form id="cp-step-form" class="cp-form"><input type="hidden" name="planId" value="${esc(s.id||'')}"><div class="cp-fields"><label class="cp-field">个人计划 / 目标事项<input name="title" required maxlength="80" value="${esc(s.title||'')}"></label><label class="cp-field">日期<input name="date" type="date" required value="${esc(s.date||P.today())}"></label><label class="cp-field">开始时间<input name="start" type="time" required value="${esc(s.start||'19:00')}"></label><label class="cp-field">预计时长（分钟）<input name="minutes" type="number" min="5" max="480" required value="${Number(s.minutes)||30}"></label><label class="cp-field">类别<select name="category">${Object.entries(categories).map(([k,v])=>`<option value="${k}" ${s.category===k?'selected':''}>${v}</option>`).join('')}</select></label><label class="cp-field">行动步骤／完成标准／实际用时备注<textarea name="note" maxlength="500" rows="2">${esc(s.note||'')}</textarea></label></div><button type="submit" class="cp-btn">${s.id?'保存修改':'添加个人计划'}</button></form>`;}
 function overlap(a,b){return a.date===b.date&&P.minute(a.start)<P.minute(b.start)+b.minutes&&P.minute(b.start)<P.minute(a.start)+a.minutes;}
-async function importStep(row,i,ctx){const p=P.parse(row.answer),s=p?.steps[i];if(!s)throw Error('没有有效计划事项');const k=row.id+':'+i;const old=await rows(ctx);if(old.some(a=>a.importKey===k))return '已加入个人计划';if(old.some(a=>a.planType==='step'&&!a.done&&overlap(a,s))&&!confirm('与现有个人计划存在时间重叠，仍然导入并稍后调整吗？'))return '已取消';await put(ctx,{...s,done:false,planType:'step',module:p.mode,importKey:k});return '已加入个人计划';}
+async function importStep(row,i,ctx){const p=P.importable(row.answer,row.inputs),s=p?.steps[i];if(!s)throw Error('没有有效计划事项');const k=row.id+':'+i;const old=await rows(ctx);if(old.some(a=>a.importKey===k))return '已加入个人计划';if(old.some(a=>a.planType==='step'&&!a.done&&overlap(a,s))&&!confirm('与现有个人计划存在时间重叠，仍然导入并稍后调整吗？'))return '已取消';await put(ctx,{...s,done:false,planType:'step',module:p.mode,importKey:k});return '已加入个人计划';}
 async function importAll(row,ctx){
- const p=P.parse(row.answer);
- if(!p?.steps?.length)throw Error('本次回复没有可导入的计划事项，请重新生成');
+ const p=P.importable(row.answer,row.inputs);
+ if(!p?.steps?.length)throw Error('没有找到可导入的规划内容，请先生成规划');
  const current=await rows(ctx),existing=current.filter(x=>x.planType==='step'&&!x.done);
  const pending=p.steps.map((s,i)=>({...s,importKey:row.id+':'+i})).filter(s=>!current.some(x=>x.importKey===s.importKey));
  if(!pending.length)return '全部计划已导入，无需重复操作';
