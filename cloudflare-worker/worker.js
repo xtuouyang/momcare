@@ -369,7 +369,7 @@ export default {
    const reqOrigin = req.headers.get('Origin') || '';
    const allowed = String(env.ALLOWED_ORIGIN || '').trim().replace(/\/$/, '');
    const origin = allowed && reqOrigin === allowed ? reqOrigin : '';
-   if(url.pathname==='/health' && req.method==='GET') return json({ok:true,service:'MomCare AI gateway',version:'family-communication-20261126',features:{family_communication:true}},200,origin);
+   if(url.pathname==='/health' && req.method==='GET') return json({ok:true,service:'MomCare AI gateway',version:'mental-report-20261126',features:{family_communication:true,mental_detailed_report:true}},200,origin);
    if(url.pathname!=='/api/chat') return json({error:'路径不存在'},404,origin);
    if(!origin && url.pathname==='/api/chat') return json({error:'请求来源未授权，请检查 ALLOWED_ORIGIN'},403);
    if(req.method==='OPTIONS') return new Response(null,{status:204,headers:{
@@ -409,11 +409,42 @@ export default {
 二、心理科普：用普通人能理解的语言解释与描述相关的情绪功能、压力反应、睡眠/生活变化、情绪与需求的联系；区分一般经历与需要额外评估的情况，不使用未经验证的统计数据或虚构资料；
 三、可以尝试的应对：给出三至五项简单、适当且可选择的行动，例如情绪命名、暂停休息、身体调节、记录触发情境、表达需求与家庭分工，不强制用户做任何事；
 四、何时需要帮助：介绍持续时间、强度、睡眠和功能受损等需要寻求心理健康专业支持的情形。对孕产期特殊压力使用审慎措辞，不把常见情绪直接等同于产后抑郁或焦虑症。如果描述显示自伤、伤害宝宝、严重混乱或失去现实感等即时危险，优先建议停止依赖 AI、寻求身边可信任人士帮助并联系当地急救服务或急诊。不要输出诊断、药物处方或危险的自助建议。避免冗长和说教。`;
-   const prompt = `当前功能：${AI_TITLES[kind]}。\n用户在表单中提供的内容（JSON）：\n${detail}\n${kind==='mood'?moodGuide:kind==='family_communication'?familyGuide:isStory?storyGuide:'请以该功能目标回应。'}`;
+   // Nine self-designed reflection questions are summarized into four average
+   // response frequencies. Individual answers and safety flags are NOT sent.
+   const mentalStageNames={
+     preconception:'备孕期',pregnancy_early:'孕早期',pregnancy_mid:'孕中期',
+     pregnancy_late:'孕晚期',postpartum_early:'产后前六周',
+     postpartum_later:'产后六周至一年',postpartum_long:'长期育儿阶段',other:'其他阶段'
+   };
+   let mentalSummary='';
+   if(kind==='mental'){
+     let domains;
+     try{domains=typeof inputs.dimensions==='string'?JSON.parse(inputs.dimensions):inputs.dimensions;}catch{domains=null;}
+     const names={mood:'情绪与兴趣',worry:'担忧与紧张',rest:'休息与日常功能',support:'陪伴与支持'};
+     if(!domains||!Object.keys(names).every(k=>typeof domains[k]==='number'&&Number.isFinite(domains[k])&&domains[k]>=0&&domains[k]<=3))
+       return json({error:'心理测评摘要不完整，请重新填写问卷'},400,origin);
+     mentalSummary='填写阶段：'+(mentalStageNames[inputs.stage]||'未说明')+'；四个维度的平均回答频次（每项范围0至3）：'+
+       Object.entries(names).map(([k,label])=>label+' '+domains[k].toFixed(1)+'/3').join('；')+'。';
+   }
+   const mentalGuide=[
+     '本功能是基于 MomCare 自编九题问卷的详细心理状态自我观察，不是 EPDS、PHQ 9、GAD 7 或其他经过验证的临床量表，不可据此诊断心理疾病、预测患病概率、划分风险等级或宣称正常异常。',
+     '你只收到当前阶段及四个维度的平均回答频次，未收到逐题答案、安全关注答案或病史。0代表完全没有、3代表几乎每天；中间数字是该维度平均作答频次，不是疾病严重度。必须尊重这一信息限制，不要假装了解某道题的准确答案。',
+     '请根据本次真实四维数据写一份约900至1300字、清晰且具体的中文关怀报告。必须依次包含以下六个小标题：',
+     '一、这份结果如何理解：概述四维观察频次，说明问卷局限，指出最值得进一步关注的维度；如果所有平均频次都低，不要据此排除困扰。',
+     '二、四个维度逐项解析：分别解释“情绪与兴趣”“担忧与紧张”“休息与日常功能”“陪伴与支持”，每项都写出对应数字、该组问题涉及的生活体验、审慎的可能解释和一个现实中可以进一步了解的问题。不要将维度均值误当个体逐题症状。',
+     '三、与生活阶段相关的心理科普：结合用户填写的阶段，解释压力、休息、关系支持或适应变化可能产生的影响；对于个体因果关系要用可能、未必等措辞，禁止凭空声称激素水平或诊断。',
+     '四、可操作的关怀与调节建议：给出四至六项根据频次优先级安排的自我照护和环境支持建议，明确做法与可行的开始步骤，允许用户按实际情况选择。避免泛泛安慰。',
+     '五、未来一周的温和行动计划与家庭沟通：分别提出今天、未来三天、一周内可以做的小步骤，并给出一段向家人提出具体照护帮助的参考话术，不能擅自替用户安排任务。',
+     '六、何时需要专业支持：解释症状持续、明显影响睡眠、照护或日常功能时应联系产科、全科或心理健康专业人员进行正规评估。对自伤、伤害宝宝、严重混乱或失去现实感等情况说明应立即寻求当地紧急救援与现场帮助。',
+     '全文不用临床诊断术语为用户贴标签，不要虚构引用、统计数字、治疗方案或专业测评结论，不需要重复量表原题。'
+   ].join('\n');
+   const guide=kind==='mental'?mentalSummary+'\n'+mentalGuide:
+     kind==='mood'?moodGuide:kind==='family_communication'?familyGuide:isStory?storyGuide:'请以该功能目标回应。';
+   const prompt = `当前功能：${AI_TITLES[kind]}。\n用户在表单中提供的内容（JSON）：\n${detail}\n${guide}`;
    try {
      const res=await fetch('https://api.deepseek.com/chat/completions',{
        method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.DEEPSEEK_API_KEY},
-       body: JSON.stringify({model:'deepseek-flash',thinking:{type:'disabled'},max_tokens:isStory?1050:kind==='family_communication'||kind==='mood'?1100:800,
+       body: JSON.stringify({model:'deepseek-flash',thinking:{type:'disabled'},max_tokens:kind==='mental'?2400:isStory?1050:kind==='family_communication'||kind==='mood'?1100:800,
          messages:[{role:'system',content:SYSTEM},{role:'user',content:prompt}]}),
        signal:AbortSignal.timeout(45000)
      });
