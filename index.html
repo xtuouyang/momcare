@@ -47,7 +47,12 @@ window.MomCareRealAI = {
       throw Error('无法连接 AI 服务，请检查 Worker 地址、部署状态与允许来源配置');
     }
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw Error(body.error || ('AI 请求失败，状态码 ' + response.status));
+    if (!response.ok) {
+      if (row.kind === 'family_communication' && body.error === '不支持的功能类型') {
+        throw Error('Cloudflare Worker 还是旧版本，尚未支持「与家人沟通」。请部署 GitHub 仓库 cloudflare-worker/worker.js 的最新代码，然后点击「重新生成」。');
+      }
+      throw Error(body.error || ('AI 请求失败，状态码 ' + response.status));
+    }
     if (!body.answer || body.source !== 'deepseek') throw Error('AI 返回内容不完整');
     return body.answer;
   }
