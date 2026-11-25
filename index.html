@@ -669,7 +669,7 @@ function create(options){
       <div class="mc-mental-safety">${FLAGS.map((q,i)=>`<fieldset class="mc-mental-question"><legend>${html(q)}</legend><div class="mc-mental-options three">${[['no','没有'],['yes','有'],['skip','暂不回答']].map(([v,t])=>`<label class="mc-mental-choice ${state.flags[i]===v?'chosen':''}"><input type="radio" name="safe${i}" value="${v}" ${state.flags[i]===v?'checked':''}><span>${t}</span></label>`).join('')}</div></fieldset>`).join('')}</div>
       <div id="mc-mental-immediate" role="alert" aria-live="assertive">${state.flags.includes('yes')?urgentMarkup():''}</div>
       ${state.error?`<p class="mc-mental-error" role="alert">${html(state.error)}</p>`:''}
-      <label class="mc-mental-consent"><input type="checkbox" id="mc-mental-submit-consent" ${state.submitConsent?'checked':''}> 我同意将当前阶段与四个维度摘要发送给 DeepSeek，并自动保存提交与回复。不会发送逐题答案和安全题答案；如有紧急安全关注则优先展示求助信息。</label><div class="mc-mental-actions"><button type="submit" class="mc-mental-btn primary">提交并查看 AI 关怀结果</button><button type="button" class="mc-mental-btn ghost" data-mental="reset">重新填写</button></div>
+      <label class="mc-mental-consent mc-mental-submit-consent"><input type="checkbox" id="mc-mental-submit-consent" ${state.submitConsent?'checked':''}><span>我同意将当前阶段与四个维度摘要发送给 DeepSeek，并自动保存提交与回复。不会发送逐题答案和安全题答案；如有紧急安全关注则优先展示求助信息。</span></label><div class="mc-mental-actions"><button type="submit" class="mc-mental-btn primary">提交并查看 AI 关怀结果</button><button type="button" class="mc-mental-btn ghost" data-mental="reset">重新填写</button></div>
     </form>
     ${result?resultMarkup(result):''}
     ${historyMarkup()}
@@ -1020,5 +1020,16 @@ if(demoEntry&&byFeature[demoEntry]&&!byFeature[demoEntry].legacy&&demoEntry!=='c
 .u-family-tool-grid .u-feature-icon{width:49px;min-width:49px;height:49px;border-radius:14px}
 @media(max-width:620px){.u-family-tool-grid{grid-template-columns:1fr;gap:12px}.u-family-tool-grid .u-feature-card{min-height:110px;padding:17px 16px;flex-direction:row}.u-family-tool-grid .u-feature-content strong{font-size:15px}.u-family-tool-grid .u-feature-content small{font-size:12px}}
 .mcai-mental-report p{font-size:13px;line-height:1.9;color:#617b6a}.mcai-mental-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px;margin:20px 0}.mcai-mental-row{border:1px solid #e3ece4;border-radius:13px;padding:16px;background:#f8fbf8}.mcai-mental-row>div{display:flex;justify-content:space-between;gap:8px;color:#416450;font-size:14px}.mcai-mental-row>div span{font-variant-numeric:tabular-nums}.mcai-mental-row progress{width:100%;height:12px;accent-color:#78a993;margin:12px 0 5px}.mcai-mental-row p{font-size:12px;margin:5px 0 0}.mcai-mental-next{background:#f4f8f4;border-radius:13px;padding:18px;margin:18px 0}.mcai-mental-next h3{font-size:15px;color:#41644f;margin:0 0 9px}@media(max-width:630px){.mcai-mental-grid{grid-template-columns:1fr}}
+/* 心理测评表单布局修复：防止通用 .u-modal form label input 的 width:100% 拉伸单选框和复选框。 */
+.u-tool-popup #mc-mental-screening .mc-mental-options{width:100%;min-width:0}
+.u-tool-popup #mc-mental-screening .mc-mental-choice{display:flex;align-items:center;justify-content:flex-start;gap:11px;min-width:0;min-height:50px;padding:12px 15px;text-align:left}
+.u-tool-popup #mc-mental-screening .mc-mental-choice>input[type="radio"]{appearance:auto;display:block;box-sizing:border-box;width:18px!important;min-width:18px!important;max-width:18px;height:18px;min-height:18px;flex:0 0 18px;padding:0!important;margin:0!important;border:0;accent-color:#458271}
+.u-tool-popup #mc-mental-screening .mc-mental-choice>span{display:block;flex:1;min-width:0;white-space:normal;word-break:normal;overflow-wrap:break-word;font-size:13px;line-height:1.5}
+.u-tool-popup #mc-mental-screening .mc-mental-consent{display:flex;align-items:flex-start;justify-content:flex-start;gap:12px;width:100%;min-width:0;text-align:left;margin:20px 0 12px}
+.u-tool-popup #mc-mental-screening .mc-mental-consent>input[type="checkbox"]{appearance:auto;display:block;box-sizing:border-box;width:18px!important;min-width:18px!important;max-width:18px;height:18px;min-height:18px;flex:0 0 18px;padding:0!important;margin:2px 0 0!important;border:0;accent-color:#3f806f}
+.u-tool-popup #mc-mental-screening .mc-mental-consent>span{display:block;min-width:0;flex:1;font-size:13px;line-height:1.75;overflow-wrap:break-word}
+.u-tool-popup #mc-mental-screening #mc-mental-form>.mc-mental-actions{display:flex;align-items:center;justify-content:flex-start;flex-wrap:wrap;gap:12px;margin:16px 0 20px}
+.u-tool-popup #mc-mental-screening .mc-mental-options.three{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media(max-width:540px){.u-tool-popup #mc-mental-screening .mc-mental-options.three{grid-template-columns:1fr}.u-tool-popup #mc-mental-screening .mc-mental-choice{min-height:46px}.u-tool-popup #mc-mental-screening #mc-mental-form>.mc-mental-actions{display:grid;grid-template-columns:1fr}.u-tool-popup #mc-mental-screening #mc-mental-form>.mc-mental-actions>.mc-mental-btn{width:100%}}
 </style><div id="mc-judge-config" role="note"><strong>真实 DeepSeek AI</strong><span>公开体验 · 无需密码 · 本地数据</span></div>
 </body></html>
