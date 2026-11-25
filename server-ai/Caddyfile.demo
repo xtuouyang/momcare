@@ -1,0 +1,15 @@
+# Temporary MomCare competition demo over HTTP.
+# Keeps the existing site unchanged at / and directs only demo/API paths
+# to the new AI container. Use fictional data because HTTP is unencrypted.
+:80 {
+    encode gzip
+
+    @momcare_demo path /demo /demo/ /api/chat /health
+    handle @momcare_demo {
+        reverse_proxy momcare-ai-standalone-ai-1:8787
+    }
+
+    handle {
+        reverse_proxy momcare:3000
+    }
+}
