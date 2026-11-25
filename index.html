@@ -1,5 +1,32 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#fbfaf8"><meta name="description" content="MomCare 第三阶段与第四阶段统一演示。保留智能调度，融合 15 项非重复关怀工具，新增孕产期心理状态自评。"><title>MomCare · 家庭关怀统一体验</title><script>
 /* MomCare 竞赛版配置：只填写 Worker 公共地址。切勿在此填写 DeepSeek API Key。 */
+/* 清理明确标记的旧版记录；保留全部演示记录、手工记录、家庭任务、宝宝数据、社区与真实 AI 历史。 */
+(function cleanLegacyMomCareRecords(){
+  try{
+    const storeKey='momcare_phase4_demo_v1';
+    const raw=localStorage.getItem(storeKey);
+    if(raw===null)return;
+    const records=JSON.parse(raw);
+    if(!Array.isArray(records))return;
+    const legacy=record=>{
+      if(!record||typeof record!=='object')return false;
+      const data=record.data||record.payload||{};
+      // 任何明确标记为演示、示例或本地 AI 模板的记录都予以保留。
+      if(record.is_example||record.is_demo||record.demo||record.source==='local_demo'||
+         data.is_example||data.is_demo||data.demo||data.source==='local_demo'||
+         record.id==='r1'||record.id==='r2'||/^seed-/.test(String(record.id||'')))return false;
+      // 已从新版界面移除的两种旧协作记录。
+      if(record.kind==='care'||record.kind==='delegation')return true;
+      // 早期规划导入器错误生成的记录；新版 :v2: 及手动添加的计划保留。
+      const key=String(data.importKey||'');
+      if(record.kind==='return'&&data.planType==='step'&&/:\d{1,2}$/.test(key)&&!/:v2:\d{1,2}$/.test(key))return true;
+      return false;
+    };
+    const current=records.filter(record=>!legacy(record));
+    if(current.length!==records.length)localStorage.setItem(storeKey,JSON.stringify(current));
+  }catch(err){console.warn('MomCare 旧版记录清理未完成',err);}
+})();
+
 window.MOMCARE_STATIC = true;
 window.MOMCARE_WORKER_URL = "https://momcare-ai-competition.27894827.workers.dev";
 window.MomCareRealAI = {
@@ -396,10 +423,11 @@ const read=()=>{try{const a=JSON.parse(localStorage.getItem(KEY)||'[]');return A
    Hand-entered step records and imports with :v2: markers are preserved. */
 function isLegacyCareerRecord(record){
  if(!record||record.kind!=='return')return false;
+ if(record.is_example===true||record.is_demo===true||record.legacy_preserve===true)return false;
  const data=record.payload||record.data||{};
- if(data.planType!=='step')return true;
+ if(data.is_example===true||data.is_demo===true)return false;
  const importKey=String(data.importKey||'');
- return /:\d{1,2}$/.test(importKey) && !/:v2:\d{1,2}$/.test(importKey);
+ return data.planType==='step' && /:\d{1,2}$/.test(importKey) && !/:v2:\d{1,2}$/.test(importKey);
 }
 function cleanupLegacyCareerRecords(){
  const current=read();
