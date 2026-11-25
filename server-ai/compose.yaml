@@ -11,9 +11,18 @@ services:
       BIND_HOST: "0.0.0.0"
     ports:
       - "127.0.0.1:8787:8787"
+    networks:
+      - default
+      - momcare_shared
     restart: unless-stopped
     init: true
     read_only: true
     security_opt:
       - no-new-privileges:true
     mem_limit: 384m
+
+networks:
+  default: {}
+  momcare_shared:
+    external: true
+    name: momcare_default
