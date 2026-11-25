@@ -93,3 +93,46 @@ server.mjs 有简单的每分钟、每日请求计数，默认每分钟 10 次�
 cd ~/momcare-ai-deploy/server-ai
 docker compose down
 ```
+
+## 6. 一个月竞赛专用的免域名演示链接
+
+如果只需要让评委通过现有公网 IP 临时演示，可以将最新版 MomCare
+直接从同一个 IP 的 /demo 路径加载，并将 /api/chat 路由到 AI 容器。
+这样网页和接口同源，不需要从 HTTPS 的 GitHub Pages 请求 HTTP。
+
+准备工作：
+
+```sh
+cd ~/momcare-ai-deploy
+git pull
+cd server-ai
+sudo docker compose up -d --build
+```
+
+compose.yaml 中已配置演示来源 DEMO_ORIGIN 默认值
+http://119.29.221.11。如果更换公网 IP，请在服务器的
+server-ai/.env 加入 DEMO_ORIGIN=http://新的IP 并重建容器。
+
+先检查内部的演示页面是否可用：
+
+```sh
+curl -I -H 'Host: 119.29.221.11' http://127.0.0.1:8787/demo
+```
+
+然后确认原 Caddy 的挂载位置，再对现有 Caddyfile 备份和修改。
+仓库提供 server-ai/Caddyfile.demo 作为示例，它将 /demo、
+/api/chat 和 /health 路由到 AI 容器，其余路径保持旧网站不变。
+不要直接覆盖现有 Caddy 配置文件而不先备份，也不要再把 8787
+直接暴露到公网。
+
+Caddy 更新后，评委的临时演示地址为：
+
+http://119.29.221.11/demo
+
+这是未加密的 HTTP 演示模式，只适合一段时间内使用虚构测试数据。
+页面中的心理测评、情绪关怀等输入会经过明文网络，不能填写真实
+医疗、家庭或个人隐私。浏览器会显示“不安全”，这是预期现象。
+同源并不等于安全认证，公开的 API 仍会产生 DeepSeek 费用。
+现有分钟和每日限流仅在进程内有效，重启会重置；请在比赛结束后
+停止此演示服务，必要时轮换密钥，并持续关注 DeepSeek 消费额度。
+中国大陆服务器对外展示还应核实适用的互联网服务合规要求。
