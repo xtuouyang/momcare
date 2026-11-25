@@ -4,7 +4,7 @@ const AI_TITLES = {
   nutrition:'妈妈营养规划', feeding:'喂养支持', visit:'就诊准备',
   return:'生活与职业发展', parent_ai:'AI 育儿顾问', baby_food:'宝宝辅食规划',
   storybook:'AI 小故事', summary:'互助社区观点摘要', shopping:'智能商品推荐',
-  ai_chat:'家庭关怀问答'
+  ai_chat:'家庭关怀问答', family_communication:'与家人沟通'
 };
 
 function json(data, status=200, origin='') {
@@ -393,6 +393,7 @@ export default {
    if(!Object.prototype.hasOwnProperty.call(AI_TITLES,kind)) return json({error:'不支持的功能类型'},400,origin);
    const inputs = sanitizeInputs(body?.inputs);
    if(!inputs || Object.keys(inputs).length===0) return json({error:'请先输入内容'},400,origin);
+   if(kind==='family_communication'&&(!String(inputs.identity||'').trim()||!String(inputs.recipient||'').trim()||!String(inputs.request||'').trim())) return json({error:'请填写自己的身份、沟通对象和沟通要求'},400,origin);
    if(kind==='shopping') return searchRealProducts(inputs,env,origin);
    if(kind==='return') return generateCareerPlan(inputs,env,origin);
    let detail=JSON.stringify(inputs);
@@ -401,11 +402,12 @@ export default {
    const isStory=kind==='storybook';
    const targetLength=storyLengths[inputs.length]||300;
    const storyGuide=`请只输出一篇完整、原创、适龄的中文小故事，不生成绘本分镜、插图提示词或图片。必须有醒目的故事标题、人物、事件起因、发展与自然结尾。根据用户填写的主角、主题、年龄和启发创作，人物情节连贯，语言生动但不说教。篇幅约${targetLength}个汉字；如提供阅读年龄，控制词汇和情节复杂度。不要声称已生成图片。`;
-   const prompt = `当前功能：${AI_TITLES[kind]}。\n用户在表单中提供的内容（JSON）：\n${detail}\n${isStory?storyGuide:'请以该功能目标回应。'}`;
+   const familyGuide=`请担任家庭沟通顾问，用户身份是“${inputs.identity||'家人'}”，沟通对象是“${inputs.recipient||'家人'}”，用户希望实现的要求是“${inputs.request||''}”。结合背景与偏好的语气，生成实用、尊重各方的沟通建议。必须分为四部分：1. 先理解沟通目标与对方可能的顾虑，不要擅自断言对方的动机；2. 提供3至5条具体沟通步骤与适当时机；3. 给出一段能够直接参考、符合该身份和语气的中文对话表达；4. 若对方拒绝或发生意见分歧，提供尊重边界的备选商量方法。不要代用户发送消息，也不要假定家人已经同意。拒绝胁迫、欺骗和操纵性的策略。若描述家庭暴力、威胁或人身危险，优先给出安全建议和现实求助方向。`;
+   const prompt = `当前功能：${AI_TITLES[kind]}。\n用户在表单中提供的内容（JSON）：\n${detail}\n${kind==='family_communication'?familyGuide:isStory?storyGuide:'请以该功能目标回应。'}`;
    try {
      const res=await fetch('https://api.deepseek.com/chat/completions',{
        method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.DEEPSEEK_API_KEY},
-       body: JSON.stringify({model:'deepseek-flash',thinking:{type:'disabled'},max_tokens:isStory?1050:800,
+       body: JSON.stringify({model:'deepseek-flash',thinking:{type:'disabled'},max_tokens:isStory?1050:kind==='family_communication'?1050:800,
          messages:[{role:'system',content:SYSTEM},{role:'user',content:prompt}]}),
        signal:AbortSignal.timeout(45000)
      });
