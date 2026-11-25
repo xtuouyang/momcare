@@ -394,6 +394,7 @@ export default {
    const inputs = sanitizeInputs(body?.inputs);
    if(!inputs || Object.keys(inputs).length===0) return json({error:'请先输入内容'},400,origin);
    if(kind==='family_communication'&&(!String(inputs.identity||'').trim()||!String(inputs.recipient||'').trim()||!String(inputs.request||'').trim())) return json({error:'请填写自己的身份、沟通对象和沟通要求'},400,origin);
+   if(kind==='mood'&&(!String(inputs.emotion_text||'').trim()||String(inputs.emotion_text).trim().length<5)) return json({error:'请先用至少五个字描述需要解析的情绪或经历'},400,origin);
    if(kind==='shopping') return searchRealProducts(inputs,env,origin);
    if(kind==='return') return generateCareerPlan(inputs,env,origin);
    let detail=JSON.stringify(inputs);
@@ -403,11 +404,16 @@ export default {
    const targetLength=storyLengths[inputs.length]||300;
    const storyGuide=`请只输出一篇完整、原创、适龄的中文小故事，不生成绘本分镜、插图提示词或图片。必须有醒目的故事标题、人物、事件起因、发展与自然结尾。根据用户填写的主角、主题、年龄和启发创作，人物情节连贯，语言生动但不说教。篇幅约${targetLength}个汉字；如提供阅读年龄，控制词汇和情节复杂度。不要声称已生成图片。`;
    const familyGuide=`请担任家庭沟通顾问，用户身份是“${inputs.identity||'家人'}”，沟通对象是“${inputs.recipient||'家人'}”，用户希望实现的要求是“${inputs.request||''}”。结合背景与偏好的语气，生成实用、尊重各方的沟通建议。必须分为四部分：1. 先理解沟通目标与对方可能的顾虑，不要擅自断言对方的动机；2. 提供3至5条具体沟通步骤与适当时机；3. 给出一段能够直接参考、符合该身份和语气的中文对话表达；4. 若对方拒绝或发生意见分歧，提供尊重边界的备选商量方法。不要代用户发送消息，也不要假定家人已经同意。拒绝胁迫、欺骗和操纵性的策略。若描述家庭暴力、威胁或人身危险，优先给出安全建议和现实求助方向。`;
-   const prompt = `当前功能：${AI_TITLES[kind]}。\n用户在表单中提供的内容（JSON）：\n${detail}\n${kind==='family_communication'?familyGuide:isStory?storyGuide:'请以该功能目标回应。'}`;
+   const moodGuide=`请根据用户用第一人称写下的情绪与经历进行“情绪解析与心理科普”，这是教育和支持，不是医疗诊断。优先依据“emotion_text”的实际描述，情绪标签、阶段、强度和持续时间只能辅助理解，不能假设用户没有说的事实。请用温和但不过度安慰的中文，按四个清晰的标题回答：
+一、情绪解析：区分用户明确说出的感受与可能的情绪（例如委屈、焦虑、烦躁、无助），使用“可能”“从描述来看”，指出信息不足的地方，不擅自推断病因、家庭成员的意图或心理疾病；
+二、心理科普：用普通人能理解的语言解释与描述相关的情绪功能、压力反应、睡眠/生活变化、情绪与需求的联系；区分一般经历与需要额外评估的情况，不使用未经验证的统计数据或虚构资料；
+三、可以尝试的应对：给出三至五项简单、适当且可选择的行动，例如情绪命名、暂停休息、身体调节、记录触发情境、表达需求与家庭分工，不强制用户做任何事；
+四、何时需要帮助：介绍持续时间、强度、睡眠和功能受损等需要寻求心理健康专业支持的情形。对孕产期特殊压力使用审慎措辞，不把常见情绪直接等同于产后抑郁或焦虑症。如果描述显示自伤、伤害宝宝、严重混乱或失去现实感等即时危险，优先建议停止依赖 AI、寻求身边可信任人士帮助并联系当地急救服务或急诊。不要输出诊断、药物处方或危险的自助建议。避免冗长和说教。`;
+   const prompt = `当前功能：${AI_TITLES[kind]}。\n用户在表单中提供的内容（JSON）：\n${detail}\n${kind==='mood'?moodGuide:kind==='family_communication'?familyGuide:isStory?storyGuide:'请以该功能目标回应。'}`;
    try {
      const res=await fetch('https://api.deepseek.com/chat/completions',{
        method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.DEEPSEEK_API_KEY},
-       body: JSON.stringify({model:'deepseek-flash',thinking:{type:'disabled'},max_tokens:isStory?1050:kind==='family_communication'?1050:800,
+       body: JSON.stringify({model:'deepseek-flash',thinking:{type:'disabled'},max_tokens:isStory?1050:kind==='family_communication'||kind==='mood'?1100:800,
          messages:[{role:'system',content:SYSTEM},{role:'user',content:prompt}]}),
        signal:AbortSignal.timeout(45000)
      });
