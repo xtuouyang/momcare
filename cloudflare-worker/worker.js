@@ -369,7 +369,7 @@ export default {
    const reqOrigin = req.headers.get('Origin') || '';
    const allowed = String(env.ALLOWED_ORIGIN || '').trim().replace(/\/$/, '');
    const origin = allowed && reqOrigin === allowed ? reqOrigin : '';
-   if(url.pathname==='/health' && req.method==='GET') return json({ok:true,service:'MomCare AI gateway'},200,origin);
+   if(url.pathname==='/health' && req.method==='GET') return json({ok:true,service:'MomCare AI gateway',version:'family-communication-20261126',features:{family_communication:true}},200,origin);
    if(url.pathname!=='/api/chat') return json({error:'路径不存在'},404,origin);
    if(!origin && url.pathname==='/api/chat') return json({error:'请求来源未授权，请检查 ALLOWED_ORIGIN'},403);
    if(req.method==='OPTIONS') return new Response(null,{status:204,headers:{
