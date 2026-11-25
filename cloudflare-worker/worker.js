@@ -22,7 +22,7 @@ function sanitizeInputs(obj) {
   const cleaned={};
   for(const [k,v] of Object.entries(obj).slice(0,45)) {
     if(!/^[a-zA-Z_][a-zA-Z_0-9]{0,44}$/.test(k))continue;
-    if(typeof v==='string') cleaned[k]=v.slice(0,700);
+    if(typeof v==='string') cleaned[k]=v.slice(0,k==='emotion_text'?1400:700);
     else if(typeof v==='number' && Number.isFinite(v))cleaned[k]=v;
     else if(Array.isArray(v) || (v && typeof v==='object'))cleaned[k]=JSON.stringify(v).slice(0,1200);
   }
