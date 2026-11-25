@@ -1,0 +1,19 @@
+name: momcare-ai-standalone
+services:
+  ai:
+    build:
+      context: ..
+      dockerfile: server-ai/Dockerfile
+    env_file:
+      - .env
+    environment:
+      PORT: "8787"
+      BIND_HOST: "0.0.0.0"
+    ports:
+      - "127.0.0.1:8787:8787"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 384m
