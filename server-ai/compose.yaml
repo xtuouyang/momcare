@@ -9,6 +9,7 @@ services:
     environment:
       PORT: "8787"
       BIND_HOST: "0.0.0.0"
+      DEMO_ORIGIN: "${DEMO_ORIGIN:-http://119.29.221.11}"
     ports:
       - "127.0.0.1:8787:8787"
     networks:
